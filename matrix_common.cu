@@ -2,7 +2,9 @@
 #include <stdio.h>            // printf
 #include <stdlib.h>           // EXIT_FAILURE
 #include <cassert>            // assert
-#include <cusparse_v2.h>
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
+#include <cusparse.h>
 #include <cuda.h>
 #include "common/common.h"
 
@@ -81,7 +83,7 @@ void generate_2_4_sparse_float_matrix_columnwise(int M, int N, float min_val, fl
 
 
 // Print part of a matrix
-void print_matrix(char *name, float *M, int nrows, int ncols, int max_row,
+void print_matrix(const char *name, float *M, int nrows, int ncols, int max_row,
         int max_col)
 {
     int row, col;
@@ -97,6 +99,17 @@ void print_matrix(char *name, float *M, int nrows, int ncols, int max_row,
         printf("...\n");
     }
     printf("...\n");
+}
+
+void printMatrixFromDevice(const char *name, float *dM, int nrows, int ncols, int max_row,
+    int max_col)
+{
+    float *hCheck = (float*)malloc(nrows*ncols*sizeof(float));
+    CHECK( cudaMemcpy(hCheck, dM, sizeof(float) * nrows * ncols,
+        cudaMemcpyDeviceToHost) )
+    print_matrix(name, hCheck, nrows, ncols, max_row, max_col);
+
+    free(hCheck);
 }
 
 void sparseTest(int M, int N, int K) {
@@ -118,7 +131,7 @@ void sparseTest(int M, int N, int K) {
     // Allocate device memory for vectors and the dense form of the matrix A
     float *dA, *dB, *dC;
     int *dNumZerosPerRowA;
-    int totalANnz;
+    int totalANnz=8;
 
 
     CHECK(cudaMalloc((void **)&dNumZerosPerRowA, sizeof(int) * M));
@@ -140,17 +153,9 @@ void sparseTest(int M, int N, int K) {
     CHECK(cudaMemset(dC, 0x00, sizeof(float) * M * N));
 
     // Compute the number of non-zero elements in A
-    CHECK_CUSPARSE(cusparseSnnz(handle, CUSPARSE_DIRECTION_ROW, M, K, Adescr,
-                                dA, M, dNumZerosPerRowA, &totalANnz));
+    //CHECK_CUSPARSE(cusparseSnnz(handle, CUSPARSE_DIRECTION_ROW, M, K, Adescr,
+    //                            dA, M, dNumZerosPerRowA, &totalANnz));
 
-    /*
-    if (totalANnz != trueANnz)
-    {
-        fprintf(stderr, "Difference detected between cuSPARSE NNZ and true "
-                "value: expected %d but got %d\n", trueANnz, totalANnz);
-        return 1;
-    }
-    */
 
     // Allocate device memory to store the sparse CSR representation of A
     float *dCsrValA;
@@ -162,24 +167,58 @@ void sparseTest(int M, int N, int K) {
 
     // Convert A from a dense formatting to a CSR formatting, using the GPU
     cusparseSpMatDescr_t matA;
+    cusparseConstDnMatDescr_t matAd;
     cusparseDnMatDescr_t matB, matC;
     void*                dBuffer    = NULL;
     size_t               bufferSize = 0;
 
+    CHECK_CUSPARSE(cusparseCreateConstDnMat(&matAd, M, K, K, dA, CUDA_R_32F, CUSPARSE_ORDER_COL));
 
+    // Check the dense matrix by copying back from device to host and print it.
+    // Should be the same as A.
+    printMatrixFromDevice("dA copied back to host", dA, M, K, 8, 8);
 
-    CHECK_CUSPARSE(cusparseCreateCsr(&matA, M, K, totalANnz,
-        dCsrRowPtrA, dCsrColIndA, dCsrValA,
+    CHECK_CUSPARSE(cusparseCreateCsr(&matA, M, K, 0,
+        dCsrRowPtrA, NULL, NULL,
         CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
-        CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F));
-    // CHECK_CUSPARSE(cusparseSdense2csr(handle, M, K, Adescr, dA, M, dNumZerosPerRowA,
-    //                                  dCsrValA, dCsrRowPtrA, dCsrColIndA,));
+        CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F))
+
+    // allocate an external buffer if needed
+    CHECK_CUSPARSE( cusparseDenseToSparse_bufferSize(
+            handle, matAd, matA,
+            CUSPARSE_DENSETOSPARSE_ALG_DEFAULT,
+            &bufferSize) )
+    CHECK( cudaMalloc(&dBuffer, bufferSize) )
+
+    // execute Sparse to Dense conversion
+    CHECK_CUSPARSE( cusparseDenseToSparse_analysis(handle, matAd, matA,
+        CUSPARSE_DENSETOSPARSE_ALG_DEFAULT,
+        dBuffer) )
+
+    // get number of non-zero elements
+    int64_t num_rows_tmp, num_cols_tmp, nnz;
+    CHECK_CUSPARSE( cusparseSpMatGetSize(matA, &num_rows_tmp, &num_cols_tmp,
+                                            &nnz) )
+
+    // allocate CSR column indices and values
+    CHECK( cudaMalloc((void**) &dCsrColIndA, nnz * sizeof(int))   )
+    CHECK( cudaMalloc((void**) &dCsrValA,  nnz * sizeof(float)) )
+    // reset offsets, column indices, and values pointers
+    CHECK_CUSPARSE( cusparseCsrSetPointers(matA, dCsrRowPtrA, dCsrColIndA,
+        dCsrValA) )
+
+    CHECK_CUSPARSE(cusparseDenseToSparse_convert(handle, matAd, matA, 
+        CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer) 
+    );
 
     // Create dense matrix B
-    CHECK_CUSPARSE( cusparseCreateDnMat(&matB, K, N, K, dB,
+    CHECK_CUSPARSE( cusparseCreateDnMat(&matB, K, N, N, dB,
                                         CUDA_R_32F, CUSPARSE_ORDER_COL) )
+
+    printMatrixFromDevice("dB copied back to host", dB, K, N, 8, 8);
+
     // Create dense matrix C
-    CHECK_CUSPARSE( cusparseCreateDnMat(&matC, M, N, M, dC,
+    CHECK_CUSPARSE( cusparseCreateDnMat(&matC, M, N, N, dC,
                                         CUDA_R_32F, CUSPARSE_ORDER_COL) )
     
     // allocate an external buffer if needed
@@ -200,6 +239,8 @@ void sparseTest(int M, int N, int K) {
 
     // Copy the result vector back to the host
     CHECK(cudaMemcpy(C, dC, sizeof(float) * M * N, cudaMemcpyDeviceToHost));
+    printMatrixFromDevice("dC copied back to host", dC, M, K, 8, 8);
+
 
     char a_matrix_desc[]="A:";
     print_matrix(a_matrix_desc, A, M, K, 8, 8);

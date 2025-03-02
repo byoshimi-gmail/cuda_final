@@ -1,8 +1,8 @@
 #
 CXX = nvcc
-INCLUDE=-I/usr/local/cuda/include
+INCLUDE=-I/usr/local/cuda/include --Wno-deprecated-declarations -L/usr/local/cuda/lib64
 
-all: matrix_perf
+all: test_common
 
 run:
 	./matrix_perf $(ARGS)
