@@ -276,6 +276,8 @@ void sparseTest(int M, int N, int K, int iterations, bool debug) {
 
     CHECK_CUSPARSE(cusparseDestroyMatDescr(Adescr));
     CHECK_CUSPARSE(cusparseDestroy(handle));
+    CHECK(cudaDeviceReset())
+
 }
 
 void cublasTest(int M, int N, int K, int iterations, bool debug) {

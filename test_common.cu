@@ -1,6 +1,7 @@
 #include <cusparse.h>         // cusparseSpMM
 #include <stdio.h>            // printf
 #include <stdlib.h>           // EXIT_FAILURE
+#include <unistd.h>
 #include "matrix_common.h"
 
 void test_generate_dense_float_matrix() {
@@ -37,16 +38,41 @@ int main(void) {
 
    // test_generate_2_4_sparse_float_matrix();
    printf("# algorithm, M, K, N, iterations, total_runtime(ms), average_runtime(ms)\n");
-   int sizes[]={8, 16, 64, 256, 512, 1024, 2048};
+   int sizes[]={8, 16, 64, 256, 512, 1024, 2048, 4096};
+   int runs = 8;
 
-   for (int i=0; i<7; i++) {
-     sparseTest(sizes[i]-1, sizes[i]-1, sizes[i]-1, 1000, false);
-     sparseTest(sizes[i], sizes[i], sizes[i], 1000, false);
-     sparseTest(sizes[i]+1, sizes[i]+1, sizes[i]+1, 1000, false);
-   }
-   for (int i=0; i<7; i++) {
-    cublasTest(sizes[i]-1, sizes[i]-1, sizes[i]-1, 1000, false);
-    cublasTest(sizes[i], sizes[i], sizes[i], 1000, false);
-    cublasTest(sizes[i]+1, sizes[i]+1, sizes[i]+1, 1000, false);
+   for (int i=0; i<runs; i++) {
+    int dim=sizes[i]-1;
+    sparseTest(dim, dim, dim, 1000, false);
+    cublasTest(dim, dim, dim, 1000, false);
+    dim=sizes[i];
+    sparseTest(dim, dim, dim, 1000, false);
+    cublasTest(dim, dim, dim, 1000, false);
+    dim=sizes[i]+2;
+    sparseTest(dim, dim, dim, 1000, false);
+    cublasTest(dim, dim, dim, 1000, false);
   }
+   /*
+   for (int i=0; i<runs; i++) {
+    //sparseTest(sizes[i]-2, sizes[i]-2, sizes[i]-2, 1000, false);
+    //sparseTest(sizes[i]-1, sizes[i]-1, sizes[i]-1, 1000, false);
+    int dim=sizes[i]-1;
+    sparseTest(dim, dim, dim, 1000, false);
+    cublasTest(dim, dim, dim, 1000, false);
+  }
+   for (int i=0; i<runs; i++) {
+     //sparseTest(sizes[i]-2, sizes[i]-2, sizes[i]-2, 1000, false);
+     //sparseTest(sizes[i]-1, sizes[i]-1, sizes[i]-1, 1000, false);
+     int dim=sizes[i];
+     sparseTest(dim, dim, dim, 1000, false);
+     cublasTest(dim, dim, dim, 1000, false);
+   }
+   for (int i=0; i<runs; i++) {
+    //sparseTest(sizes[i]-2, sizes[i]-2, sizes[i]-2, 1000, false);
+    //sparseTest(sizes[i]-1, sizes[i]-1, sizes[i]-1, 1000, false);
+    int dim=sizes[i]+2;
+    sparseTest(dim, dim, dim, 1000, false);
+    cublasTest(dim, dim, dim, 1000, false);
+  }
+    */
 }
