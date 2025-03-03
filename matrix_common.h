@@ -5,4 +5,6 @@ void generate_2_4_sparse_float_matrix_columnwise(int M, int N, float min_val, fl
 void print_matrix(const char *name, float *M, int nrows, int ncols, int max_row,
                   int max_col);
 
-void sparseTest(int M, int N, int K);
+
+void sparseTest(int M, int N, int K, int iterations, bool debug);
+void cublasTest(int M, int N, int K, int iterations, bool debug);

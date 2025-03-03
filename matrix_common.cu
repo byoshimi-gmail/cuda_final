@@ -4,8 +4,10 @@
 #include <cassert>            // assert
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
+#include <cublas_v2.h>
 #include <cusparse.h>
 #include <cuda.h>
+#include <time.h>
 #include "common/common.h"
 
 // Common cuda functions wrapping matrix operations.
@@ -112,7 +114,7 @@ void printMatrixFromDevice(const char *name, float *dM, int nrows, int ncols, in
     free(hCheck);
 }
 
-void sparseTest(int M, int N, int K) {
+void sparseTest(int M, int N, int K, int iterations, bool debug) {
     float alpha=1;
     float beta=1;
 
@@ -122,7 +124,6 @@ void sparseTest(int M, int N, int K) {
 
     generate_2_4_sparse_float_matrix_columnwise(M, N, 0.0, 10.0, &A);
     generate_dense_float_matrix(K, N, -1.0, 1.0, &B);
-    C = (float *)malloc(sizeof(float) * M * M);
 
     // Create the cuSPARSE handle
     cusparseHandle_t handle = 0;
@@ -176,7 +177,9 @@ void sparseTest(int M, int N, int K) {
 
     // Check the dense matrix by copying back from device to host and print it.
     // Should be the same as A.
+    if (debug) {
     printMatrixFromDevice("dA copied back to host", dA, M, K, 8, 8);
+    }
 
     CHECK_CUSPARSE(cusparseCreateCsr(&matA, M, K, 0,
         dCsrRowPtrA, NULL, NULL,
@@ -215,7 +218,9 @@ void sparseTest(int M, int N, int K) {
     CHECK_CUSPARSE( cusparseCreateDnMat(&matB, K, N, N, dB,
                                         CUDA_R_32F, CUSPARSE_ORDER_COL) )
 
-    printMatrixFromDevice("dB copied back to host", dB, K, N, 8, 8);
+    if (debug) {
+        printMatrixFromDevice("dB copied back to host", dB, K, N, 8, 8);
+    }
 
     // Create dense matrix C
     CHECK_CUSPARSE( cusparseCreateDnMat(&matC, M, N, N, dC,
@@ -231,24 +236,32 @@ void sparseTest(int M, int N, int K) {
     CHECK( cudaMalloc(&dBuffer, bufferSize) )
 
     // execute SpMM
-    CHECK_CUSPARSE( cusparseSpMM(handle,
-                                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                                 &alpha, matA, matB, &beta, matC, CUDA_R_32F,
-                                 CUSPARSE_SPMM_ALG_DEFAULT, dBuffer) )
+    clock_t start = clock();
+    for (int i = 0; i<iterations; i++) {
+        CHECK_CUSPARSE( cusparseSpMM(handle,
+                                    CUSPARSE_OPERATION_NON_TRANSPOSE,
+                                    CUSPARSE_OPERATION_NON_TRANSPOSE,
+                                    &alpha, matA, matB, &beta, matC, CUDA_R_32F,
+                                    CUSPARSE_SPMM_ALG_DEFAULT, dBuffer) )
+    }
+    double duration_ms=(clock() - start)*1000/CLOCKS_PER_SEC;
 
     // Copy the result vector back to the host
     CHECK(cudaMemcpy(C, dC, sizeof(float) * M * N, cudaMemcpyDeviceToHost));
-    printMatrixFromDevice("dC copied back to host", dC, M, K, 8, 8);
+    // printMatrixFromDevice("dC copied back to host", dC, M, K, 8, 8);
 
 
-    char a_matrix_desc[]="A:";
-    print_matrix(a_matrix_desc, A, M, K, 8, 8);
-    char b_matrix_desc[]="b:";
-    print_matrix(b_matrix_desc, B, K, N, 8, 8);
-    char c_matrix_desc[]="C:";
-    print_matrix(c_matrix_desc, C, M, N, 8, 8);
+    if (debug) {
+        char a_matrix_desc[]="A:";
+        print_matrix(a_matrix_desc, A, M, K, 8, 8);
+        char b_matrix_desc[]="b:";
+        print_matrix(b_matrix_desc, B, K, N, 8, 8);
+        char c_matrix_desc[]="C:";
+        print_matrix(c_matrix_desc, C, M, N, 8, 8);
+    }
 
+    printf("cusparseSpMM, %d, %d, %d, %d, %f, %f\n",
+        M, K, N, iterations, duration_ms, (double)duration_ms/iterations);
     free(A);
     free(B);
     free(C);
@@ -263,4 +276,59 @@ void sparseTest(int M, int N, int K) {
 
     CHECK_CUSPARSE(cusparseDestroyMatDescr(Adescr));
     CHECK_CUSPARSE(cusparseDestroy(handle));
+}
+
+void cublasTest(int M, int N, int K, int iterations, bool debug) {
+    cublasHandle_t cublasH = NULL;
+    cudaStream_t stream = NULL;
+
+    CHECK_CUBLAS(cublasCreate(&cublasH))
+    CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking))
+    CHECK_CUBLAS(cublasSetStream(cublasH, stream))
+
+    float *A = (float*)malloc(M*K*sizeof(float));
+    float *B = (float*)malloc(K*N*sizeof(float));
+    float *C = (float*)malloc(M*N*sizeof(float));
+
+    generate_2_4_sparse_float_matrix_columnwise(M, N, 0.0, 10.0, &A);
+    generate_dense_float_matrix(K, N, -1.0, 1.0, &B);
+    float alpha = 1.0;
+    float beta = 1.0;
+
+    float *dA, *dB, *dC;
+
+    // Allocate space on device
+    CHECK(cudaMalloc(reinterpret_cast<void **>(&dA), M*K*sizeof(float)))
+    CHECK(cudaMalloc(reinterpret_cast<void **>(&dB), K*N*sizeof(float)))
+    CHECK(cudaMalloc(reinterpret_cast<void **>(&dC), M*N*sizeof(float)))
+
+    // Copy from Host to Device
+    CHECK(cudaMemcpyAsync(dA, A, sizeof(float)*M*K, cudaMemcpyHostToDevice, stream))
+    CHECK(cudaMemcpyAsync(dB, B, sizeof(float)*K*N, cudaMemcpyHostToDevice, stream))
+
+    // Multiply matrices
+    clock_t start = clock();
+    for (int i = 0; i<iterations; i++) {
+        CHECK_CUBLAS(cublasSgemm(cublasH, CUBLAS_OP_N, CUBLAS_OP_N,
+            M, N, K, &alpha, dA, K, dB, N, &beta, dC, N))
+    }
+    double duration_ms=(clock() - start)*1000/CLOCKS_PER_SEC;
+    printf("cublasSgemm, %d, %d, %d, %d, %f, %f\n",
+        M, K, N, iterations, duration_ms, (double)duration_ms/iterations);
+
+    CHECK(cudaMemcpyAsync(C, dC, sizeof(float)*M*N, cudaMemcpyDeviceToHost, stream))
+    CHECK(cudaStreamSynchronize(stream))
+
+    if (debug) {
+        print_matrix("C", C, M, N, 8, 8);
+    }
+    CHECK(cudaFree(dA))
+    CHECK(cudaFree(dB))
+    CHECK(cudaFree(dC))
+    free(A);
+    free(B);
+    free(C);
+    CHECK_CUBLAS(cublasDestroy(cublasH))
+    CHECK(cudaStreamDestroy(stream))
+    CHECK(cudaDeviceReset())
 }
