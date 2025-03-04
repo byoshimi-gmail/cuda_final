@@ -55,12 +55,13 @@
 
 
 void usage(char *argv[]) {
-    printf("usage: %s cusparse|cublas M K N iterations\n", argv[0]);
+    printf("usage: %s cusparse|cublas M K N iterations debug\n", argv[0]);
+    printf("\t debug = t|f\n");
 
 }
 int main(int argc, char *argv[]) {
-    // usage: cusparse|cublas M K N iterations
-    if (argc != 6) {
+    // usage: cusparse|cublas M K N iterations t|f
+    if (argc != 7) {
         usage(argv);
         return -1;
     }
@@ -69,12 +70,13 @@ int main(int argc, char *argv[]) {
     int K=atoi(argv[3]);
     int N=atoi(argv[4]);
     int iterations = atoi(argv[5]);
+    char *debug = argv[6];
 
     if (strcmp(argv[1], "cusparse") == 0) {
         // cusparse
-        sparseTest(M, K, N, iterations, false);
+        sparseTest(M, K, N, iterations, debug[0]=='t');
     } else if (strcmp(argv[1], "cublas") == 0) {
-        cublasTest(M, N, K, iterations, false);
+        cublasTest(M, N, K, iterations, debug[0]=='t');
     } else {
         usage(argv);
         return -1;

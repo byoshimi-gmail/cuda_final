@@ -90,7 +90,7 @@ void print_matrix(const char *name, float *M, int nrows, int ncols, int max_row,
 {
     int row, col;
 
-    printf("Dumping matrix %s: (max_rows=%d, max_cols=%d)\n", name, max_row, max_col);
+    printf("Dumping matrix %s[%d, %d]: (max_rows=%d, max_cols=%d)\n", name, nrows, ncols, max_row, max_col);
 
     for (row = 0; row < max_row; row++)
     {
@@ -280,7 +280,7 @@ void sparseTest(int M, int N, int K, int iterations, bool debug) {
 
 }
 
-void cublasTest(int M, int N, int K, int iterations, bool debug) {
+void cublasTestAsync(int M, int N, int K, int iterations, bool debug) {
     cublasHandle_t cublasH = NULL;
     cudaStream_t stream = NULL;
 
@@ -332,5 +332,56 @@ void cublasTest(int M, int N, int K, int iterations, bool debug) {
     free(C);
     CHECK_CUBLAS(cublasDestroy(cublasH))
     CHECK(cudaStreamDestroy(stream))
+    CHECK(cudaDeviceReset())
+}
+
+
+void cublasTest(int M, int N, int K, int iterations, bool debug) {
+    cublasHandle_t cublasH = NULL;
+
+    CHECK_CUBLAS(cublasCreate(&cublasH))
+
+    float *A = (float*)malloc(M*K*sizeof(float));
+    float *B = (float*)malloc(K*N*sizeof(float));
+    float *C = (float*)malloc(M*N*sizeof(float));
+
+    generate_2_4_sparse_float_matrix_columnwise(M, N, 0.0, 10.0, &A);
+    generate_dense_float_matrix(K, N, -1.0, 1.0, &B);
+    float alpha = 1.0;
+    float beta = 1.0;
+
+    float *dA, *dB, *dC;
+
+    // Allocate space on device
+    CHECK(cudaMalloc(reinterpret_cast<void **>(&dA), M*K*sizeof(float)))
+    CHECK(cudaMalloc(reinterpret_cast<void **>(&dB), K*N*sizeof(float)))
+    CHECK(cudaMalloc(reinterpret_cast<void **>(&dC), M*N*sizeof(float)))
+
+    // Copy from Host to Device
+    CHECK(cudaMemcpy(dA, A, sizeof(float)*M*K, cudaMemcpyHostToDevice))
+    CHECK(cudaMemcpy(dB, B, sizeof(float)*K*N, cudaMemcpyHostToDevice))
+
+    // Multiply matrices
+    clock_t start = clock();
+    for (int i = 0; i<iterations; i++) {
+        CHECK_CUBLAS(cublasSgemm(cublasH, CUBLAS_OP_N, CUBLAS_OP_N,
+            M, N, K, &alpha, dA, K, dB, N, &beta, dC, N))
+    }
+    double duration_ms=(clock() - start)*1000/CLOCKS_PER_SEC;
+    printf("cublasSgemm(sync), %d, %d, %d, %d, %f, %f\n",
+        M, K, N, iterations, duration_ms, (double)duration_ms/iterations);
+
+    CHECK(cudaMemcpy(C, dC, sizeof(float)*M*N, cudaMemcpyDeviceToHost))
+
+    if (debug) {
+        print_matrix("C", C, M, N, 8, 8);
+    }
+    CHECK(cudaFree(dA))
+    CHECK(cudaFree(dB))
+    CHECK(cudaFree(dC))
+    free(A);
+    free(B);
+    free(C);
+    CHECK_CUBLAS(cublasDestroy(cublasH))
     CHECK(cudaDeviceReset())
 }
