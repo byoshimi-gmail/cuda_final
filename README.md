@@ -1,5 +1,7 @@
 # README.md
 
+For 20 minute video going over most of this see: https://drive.google.com/file/d/1jP9iOgSNUAWwiivfb8ZUT7fsYbNL-a2h/view?usp=drive_link
+
 ## Analysing the performance differences between cusparse and cuBLAS libraries for gemm.
 
 GEMM, general matrix multiplication is used frequently by many machine learning algorithms.
